@@ -2,7 +2,10 @@ import socket, select
 import sys
 import time
 import errno
-from Queue import Queue
+try:
+    from Queue import Queue
+except ImportError:
+    from queue import Queue
 import adns # requires libadns1, on ubuntu: apt-get install python-adns
 
 #### Configuration ####
@@ -40,7 +43,7 @@ class DomainError(ConnectionError):
 
 class ResetError(ConnectionError):
 	pass
-	
+
 class SockError(ConnectionError):
 	pass
 
@@ -70,12 +73,12 @@ class Context:
 		try:
 			self.log(error)
 			syscall = self.task.throw(error)
-		
+
 			if isinstance(syscall, timer):
 				syscall(self) # <-- this may be buggy! added for timer support
 				# always advance timer syscalls to prevent the next throw from landing in an except clause
 				self.task.send(None)
-		
+
 		except Timer as ex:
 			self.log('Timer thrown to except clause; putting back in queue')
 			timers.append(self)
@@ -83,7 +86,7 @@ class Context:
 		except StopIteration as ex:
 			self.log('StopIteration caught after context.throw()')
 
-		except ConnectionError as ex: 
+		except ConnectionError as ex:
 			# task didnt except error, add to statistics and ignore
 			name = ex.__class__.__name__
 			statistics[name] = statistics.get(name,0) + 1
@@ -102,10 +105,10 @@ class Context:
 	def log(self, msg, sockerror=None):
 		"""method to log debugging messages associated with a fileno"""
 		if sockerror:
-			msg += " (Socket Error [%s] %s)" % (sockerror, errno.errorcode[sockerror])
+			msg += " (Socket Error [{0}] {1})".format(sockerror, errno.errorcode[sockerror])
 		self.tracelog.append(msg)
 		fileno = self.fileno if hasattr(self, 'fileno') else ""
-		if config.verbose: print "[%s] %s" % (fileno, msg)
+		if config.verbose: print("[{0}] {1}".format(fileno, msg))
 
 
 class resolve:
@@ -115,7 +118,7 @@ class resolve:
 	def __init__(self, host, record_type = adns.rr.A):
 		self.host = host
 		self.record_type = record_type
-	
+
 	def __call__(self, context):
 		# be sure to keep a reference to the query, or adns-python gets very upset
 		query = resolver.submit(self.host, self.record_type, 0)
@@ -129,7 +132,7 @@ class syncresolve:
 	"""
 	def __init__(self, host):
 		self.host = host
-	
+
 	def __call__(self, context):
 		try:
 			ip = socket.gethostbyname(self.host)
@@ -157,7 +160,7 @@ class connect:
 		# nee to use openssl probably
 		#if self.ssl:
 		#	sock = ssl.wrap_socket(s)
-		
+
 		sock.setblocking(0)
 		# do not linger on close, kernel will try to gracefully close in background
 		#sock.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 0, 0))
@@ -165,7 +168,7 @@ class connect:
 		# add socket to list of pending connections
 		# don't actually call connect() here, just enqueue it
 		context.fileno = sock.fileno()
-		context.sock = sock 
+		context.sock = sock
 		context.timeout = self.timeout
 		context.atime = time.time()
 
@@ -178,11 +181,11 @@ class connect:
 				context.log("DNS cache miss: [%s]" % self.host)
 				ip = socket.gethostbyname(self.host)
 				dns_cache[self.host] = ip
-			
+
 			# connect but expect EINPROGRESS
 			context.address = (ip, self.port)
 			err = sock.connect_ex(context.address)
-			
+
 			# for debugging
 			context.log("Connecting [%s]" % errno.errorcode[err])
 
@@ -190,11 +193,11 @@ class connect:
 				msg = "ConnectError [%s]" % (errno.errorcode[err])
 				context.throw(ConnectError(msg))
 			else:
-				# register with epoll for write. 
+				# register with epoll for write.
 				# when it has connected epoll will report a ready-to-write event
 				connections[context.fileno] = context
 				epoll.register(context.fileno, select.EPOLLOUT)
-	
+
 		# throw DNS errors
 		except socket.gaierror as ex:
 			msg = "DomainError [%s] %s" % (ex.args)
@@ -208,25 +211,25 @@ class read:
 
 	def __call__(self, context):
 		context.response = ""
-		
+
 		try:
 			context.log('read, setting epoll for EPOLLIN')
 			#epoll.modify(fileno, select.EPOLLIN | select.EPOLLET)
 			epoll.modify(context.fileno, select.EPOLLIN)
-		
+
 		except IOError as ex:
 			msg = "ClosedError: Read failed; socket already closed"
-			context.throw(ClosedError(msg)) 
+			context.throw(ClosedError(msg))
 
 
 class write:
 	"""write system call"""
 	def __init__(self, data):
 		self.data = data
-	
+
 	def __call__(self, context):
 		context.request = self.data
-		
+
 		try:
 			context.log('write, seting epoll for EPOLLOUT')
 			#epoll.modify(fileno, select.EPOLLOUT | select.EPOLLET)
@@ -234,22 +237,22 @@ class write:
 
 		except IOError as ex:
 			msg = "ClosedError: Write failed; Socket already closed"
-			context.throw(ClosedError(msg)) 
-		
+			context.throw(ClosedError(msg))
+
 
 
 class close:
 	"""close system call"""
 	def __call__(self, context):
-		
+
 		try:
 			context.log("close, setting epoll to 0")
 			context.sock.shutdown(socket.SHUT_RDWR)
 			# set as 0 for level or EPOLLET for edge triggered
 			#epoll.modify(fileno, select.EPOLLET)
 			epoll.modify(context.fileno, 0)
-		
-		except socket.error, socket.msg:
+
+		except (socket.error, socket.msg):
 			(err, errmsg) = socket.msg.args
 			msg = "ConnectionError during close [%s] %s" % (err, errmsg)
 			context.throw(ConnectionError(msg))
@@ -261,14 +264,14 @@ class timer:
 
 	def __call__(self, context):
 		context.log("timer syscall")
-		context.event_timeout = self.event_timeout 
+		context.event_timeout = self.event_timeout
 		timers.append(context)
 
 
 def add(task):
 	"""convenience method to add task objects without a generator"""
 	queue.put(task)
-	print "adding task (%i)" % queue.qsize()
+	print("adding task (%i)" % queue.qsize())
 
 
 #### The main event loop ####
@@ -282,10 +285,10 @@ def run(taskgen):
 	while connections or resolver.allqueries() or not done:
 
 		# use a blank line to separate messages in each loop
-		if config.verbose: print ""
+		if config.verbose: print("")
 
 		#### ADD TASK ####
-		
+
 		# we are no longer done if tasks were added to the queue at runtime
 		qdone = queue.empty()
 
@@ -295,7 +298,7 @@ def run(taskgen):
 			try:
 				# get task from queue first
 				if not queue.empty():
-					print "getting task from queue"
+					print("getting task from queue")
 					task = queue.get()
 					qdone = queue.empty()
 				# get task from generator
@@ -330,13 +333,13 @@ def run(taskgen):
 				context.throw(DomainError('adns unable to resolve: %s' % host))
 
 		#### READ, WRITE, CLOSE ####
-		
+
 		# get epoll events
 		events = epoll.poll(1)
 		for fileno, event in events:
-			
+
 			if fileno not in connections:
-				print "fileno %s not in connections. epoll event %x" % (fileno, event)
+				print("fileno %s not in connections. epoll event %x" % (fileno, event))
 				sys.exit(1)
 
 			# get context
@@ -346,9 +349,9 @@ def run(taskgen):
 			context.atime = time.time()
 			global current
 			current = context
-			
+
 			try:
-		
+
 				# read response
 				if event & select.EPOLLIN:
 					err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
@@ -356,7 +359,7 @@ def run(taskgen):
 					blocksize = 8096
 					response = sock.recv(blocksize)
 					context.log("%i bytes read" % len(response))
-					
+
 					context.response += response
 
 					# less than blocksize means EOF
@@ -364,7 +367,7 @@ def run(taskgen):
 						if len(context.response) > 0:
 							# send response, get new opp
 							context.send(context.response)
-				
+
 				# send request
 				elif event & select.EPOLLOUT:
 					err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
@@ -387,36 +390,36 @@ def run(taskgen):
 				if event & select.EPOLLHUP:
 					err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
 					context.log('EPOLLHUP', err)
-					
+
 					epoll.unregister(fileno)
 					connections.pop(fileno, None)
 					#sock.close()
-					
+
 					# advance the coroutine
 					context.send(None)
-			
+
 					# remote host closed connection
 					if err == errno.ECONNRESET or err == errno.ENOTCONN:
 						context.throw(ResetError("ResetError [%s] %s" % (err, errno.errorcode[err])))
-		
+
 				#if event & select.EPOLLERR:
 				#	context.throw(EpollError("EpollError %s" % event))
 					#sys.exit(1)
 
 			# throw any socket/epoll exceptions not handled by other methods
-			except socket.error, socket.msg:
+			except (socket.error, socket.msg):
 				(err, errmsg) = socket.msg.args
-				context.log("socket.error [%s] caught in run(): %s" % (err, errmsg))	
+				context.log("socket.error [%s] caught in run(): %s" % (err, errmsg))
 				# pop but dont close an already closed connection
 				connections.pop(fileno, None)
 				epoll.unregister(fileno)
-			
+
 				# remote host closed connection
 				if err == errno.ECONNRESET or err == errno.ENOTCONN:
 					context.throw(ResetError("ResetError [%s] %s" % (err, errmsg)))
 				else:
 					context.throw(SockError("SockError [%s] %s" % (err, errmsg)))
-			
+
 				# advance to keep statistics accurate (throws StopIteration on purpose)
 				context.send(None)
 
@@ -425,13 +428,13 @@ def run(taskgen):
 		else:
 			now = time.time()
 			for fileno,context in connections.items():
-				
+
 				delta = now - context.atime
 				err = context.sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-				
+
 				if err:
 					context.log("connection state %s" % errno.errorcode[err])
-				
+
 				elif delta > context.timeout:
 					msg = "TimeoutError no connection activity for %.3f seconds" % delta
 					close()(context)
@@ -448,30 +451,30 @@ def debug(taskgen):
 	"""A debugging wrapper for run()"""
 	import traceback
 	start = time.time()
-	
+
 	try:
 		run(taskgen)
 
 	except Exception as ex:
-	
-		print '\n-- context --\n'
+
+		print('\n-- context --\n')
 		if current:
 			for t in current.tracelog:
-				print t
+				print(t)
 
 		# also print stack trace
-		print '\n-- trace --\n'
+		print('\n-- trace --\n')
 		traceback.print_exc()
-		print ex
+		print(ex)
 
 	finally:
 		end = time.time()
-		print '\n-- statistics --\n'
+		print('\n-- statistics --\n')
 		for k,v in statistics.items():
-			print '%s : %s' % (k,v)
-		
+			print('%s : %s' % (k,v))
+
 		completed = statistics.get('Completed',0)
-		print "%i task completed in %.3f seconds (%.3f per sec)\n" % (completed, end-start, completed/(end-start)) 
+		print("%i task completed in %.3f seconds (%.3f per sec)\n" % (completed, end-start, completed/(end-start)))
 
 
 
