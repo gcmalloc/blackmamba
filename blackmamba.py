@@ -1,8 +1,7 @@
 import socket, select
-import sys, struct
+import sys
 import time
 import errno
-import ssl
 from Queue import Queue
 import adns # requires libadns1, on ubuntu: apt-get install python-adns
 
