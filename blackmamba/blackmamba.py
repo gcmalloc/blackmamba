@@ -252,8 +252,8 @@ class close:
 			#epoll.modify(fileno, select.EPOLLET)
 			epoll.modify(context.fileno, 0)
 
-		except (socket.error, socket.msg):
-			(err, errmsg) = socket.msg.args
+        except socket.error as e:
+			(err, errmsg) = e.args
 			msg = "ConnectionError during close [%s] %s" % (err, errmsg)
 			context.throw(ConnectionError(msg))
 
